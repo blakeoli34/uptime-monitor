@@ -388,7 +388,11 @@ class StatusPageController extends BaseController {
                 COALESCE(ml.status, 0) as current_status,
                 ml.checked_at as last_checked,
                 (
-                    SELECT checked_at 
+                    SELECT IF(
+                        t1.checked_at < m.created_at, 
+                        m.created_at,  -- Use the monitor's creation date if the status time is before it
+                        t1.checked_at  -- Otherwise use the actual status time
+                    )
                     FROM monitor_logs t1
                     WHERE t1.monitor_id = m.id
                     AND t1.status = COALESCE(ml.status, 0)
@@ -399,6 +403,7 @@ class StatusPageController extends BaseController {
                         AND t2.checked_at > t1.checked_at
                         AND t2.status != t1.status
                     )
+                    AND t1.checked_at >= m.created_at  -- Only consider log entries after monitor creation
                     ORDER BY t1.checked_at ASC
                     LIMIT 1
                 ) as status_since
