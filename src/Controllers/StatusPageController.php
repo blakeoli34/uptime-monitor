@@ -286,35 +286,42 @@ class StatusPageController extends BaseController {
 
     public function formatUptime($timestamp) {
         if (!$timestamp) return 'just now';
+        
+        // Create DateTime objects
+        $now = new \DateTime();
+        $uptime = new \DateTime($timestamp);
+        
+        // Calculate difference
+        $diff = $now->diff($uptime);
+        
+        // Only return "just now" if truly just now (less than 30 seconds)
+        if ($diff->days == 0 && $diff->h == 0 && $diff->i == 0 && $diff->s < 30) {
+            return 'just now';
+        }
     
-        $now = new \DateTime();
-        $uptime = new \DateTime($timestamp);
-        $diff = $uptime->diff($now);
-        
-        if ($diff->i === 0) return 'just now';
-
-        $now = new \DateTime();
-        $uptime = new \DateTime($timestamp);
-        $diff = $uptime->diff($now);
-        
         if ($diff->y > 0) {
             return $diff->y . ' year' . ($diff->y > 1 ? 's' : '') . ', ' . 
-                   $diff->m . ' month' . ($diff->m > 1 ? 's' : '');
+                $diff->m . ' month' . ($diff->m > 1 ? 's' : '');
         }
         if ($diff->m > 0) {
             return $diff->m . ' month' . ($diff->m > 1 ? 's' : '') . ', ' . 
-                   $diff->d . ' day' . ($diff->d > 1 ? 's' : '');
+                $diff->d . ' day' . ($diff->d > 1 ? 's' : '');
         }
         if ($diff->d > 0) {
             return $diff->d . ' day' . ($diff->d > 1 ? 's' : '') . ', ' . 
-                   $diff->h . ' hour' . ($diff->h > 1 ? 's' : '');
+                $diff->h . ' hour' . ($diff->h > 1 ? 's' : '');
         }
         if ($diff->h > 0) {
             return $diff->h . ' hour' . ($diff->h > 1 ? 's' : '') . ', ' . 
-                   $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
+                $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
         }
-        return $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
+        if ($diff->i > 0) {
+            return $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
+        }
+        
+        return $diff->s . ' second' . ($diff->s > 1 ? 's' : '');
     }
+
 
     // Public status page view
     public function show($slug) {
@@ -333,33 +340,39 @@ class StatusPageController extends BaseController {
      
         // Get monitors basic info
         $sql = "SELECT m.*, 
-                ml.status as current_status,
+                COALESCE(ml.status, 0) as current_status,
                 ml.checked_at as last_checked,
                 (
-                    SELECT checked_at
-                    FROM monitor_logs
-                    WHERE monitor_id = m.id 
-                    AND status = CASE 
-                        WHEN ml.status = 1 THEN 1 
-                        ELSE 0 
-                    END
-                    AND checked_at <= ml.checked_at
-                    ORDER BY checked_at DESC
+                    SELECT checked_at 
+                    FROM monitor_logs t1
+                    WHERE t1.monitor_id = m.id
+                    AND t1.status = COALESCE(ml.status, 0)
+                    AND NOT EXISTS (
+                        SELECT 1 
+                        FROM monitor_logs t2
+                        WHERE t2.monitor_id = t1.monitor_id
+                        AND t2.checked_at > t1.checked_at
+                        AND t2.status != t1.status
+                    )
+                    ORDER BY t1.checked_at ASC
                     LIMIT 1
                 ) as status_since
                 FROM monitors m
                 JOIN status_page_monitors spm ON spm.monitor_id = m.id
-                LEFT JOIN monitor_logs ml ON ml.monitor_id = m.id
+                LEFT JOIN (
+                    SELECT ml1.monitor_id, ml1.status, ml1.checked_at
+                    FROM monitor_logs ml1
+                    INNER JOIN (
+                        SELECT monitor_id, MAX(checked_at) as max_checked_at
+                        FROM monitor_logs
+                        GROUP BY monitor_id
+                    ) ml2 ON ml1.monitor_id = ml2.monitor_id AND ml1.checked_at = ml2.max_checked_at
+                ) ml ON m.id = ml.monitor_id
                 WHERE spm.status_page_id = ?
-                AND ml.checked_at = (
-                    SELECT MAX(checked_at)
-                    FROM monitor_logs
-                    WHERE monitor_id = m.id
-                )
                 ORDER BY m.name ASC";
      
         $monitors = $this->db->query($sql, [$page['id']])->fetchAll();
-
+    
         foreach ($monitors as &$monitor) {
             $monitor['up_since'] = $monitor['current_status'] ? $monitor['status_since'] : null;
             $monitor['down_since'] = $monitor['current_status'] ? null : $monitor['status_since'];
@@ -416,7 +429,7 @@ class StatusPageController extends BaseController {
      
             $monitor['total_uptime'] = $days > 0 ? $totalUptime / $days : 100;
         }
-
+    
         unset($monitor);
      
         // Get incident history
@@ -439,7 +452,7 @@ class StatusPageController extends BaseController {
             AND status = 1
         )
         ORDER BY ml_start.checked_at DESC";
-
+    
         $incidents = $this->db->query($sql, [$page['id']])->fetchAll();
         
         // Calculate system status
@@ -466,7 +479,7 @@ class StatusPageController extends BaseController {
             'partialOutage' => $partialOutage,
             'formatUptime' => [$this, 'formatUptime']
         ]);
-     }
+    }
      
      private function getLastStatusChange($monitorId, $status) {
         $sql = "SELECT checked_at 

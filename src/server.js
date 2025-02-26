@@ -174,9 +174,15 @@ async function startServer() {
         await monitor.initialize();
         
         // Start all active monitors from the database
-        const [rows] = await monitor.db.execute('SELECT id FROM monitors WHERE active = 1');
+        const [rows] = await monitor.db.execute('SELECT id FROM monitors');
+        logger.info(`Starting ${rows.length} monitors`);
         for (const row of rows) {
-            await monitor.startMonitor(row.id);
+            try {
+                await monitor.startMonitor(row.id);
+                logger.info(`Started monitor ${row.id}`);
+            } catch (error) {
+                logger.error(`Failed to start monitor ${row.id}:`, error);
+            }
         }
 
         const port = config.monitor.port;

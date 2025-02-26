@@ -204,7 +204,11 @@ function getStatusColor($uptime) {
                                 <?= $monitor['current_status'] ? '<span class="up">Up</span>' : '<span class="down">Down</span>' ?>
                             </p>
                             <p class="has-text-grey is-size-7">
-                                for <?= $formatUptime($monitor['status_since']) ?>
+                                <?php if ($monitor['status_since']): ?>
+                                    for <?= $formatUptime($monitor['status_since']) ?>
+                                <?php else: ?>
+                                    just now
+                                <?php endif; ?>
                             </p>
                         </div>
                     </div>

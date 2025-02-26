@@ -32,12 +32,14 @@ class UptimeMonitor {
         const queries = [
             `CREATE TABLE IF NOT EXISTS monitors (
                 id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
                 name VARCHAR(255) NOT NULL,
                 url VARCHAR(255) NOT NULL,
                 type ENUM('http', 'tcp', 'ssl') NOT NULL,
                 interval_seconds INT NOT NULL,
                 port INT,
                 webhook_url VARCHAR(255),
+                active BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )`,
             `CREATE TABLE IF NOT EXISTS monitor_logs (
@@ -47,10 +49,10 @@ class UptimeMonitor {
                 response_time INT,
                 error_message TEXT,
                 checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (monitor_id) REFERENCES monitors(id)
+                FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
             )`
         ];
-
+    
         for (const query of queries) {
             await this.db.execute(query);
         }
@@ -134,12 +136,31 @@ class UptimeMonitor {
         try {
             const response = await axios.get(url, {
                 timeout: config.monitor.timeouts.http,
-                validateStatus: null
+                validateStatus: null, // Don't throw on error status codes
+                maxRedirects: 5
             });
-            logger.info(`HTTP check for ${url}: status ${response.status}`);
-            return response.status >= 200 && response.status < 400;
+            
+            // Consider 200-399 as success, anything else (including 4xx and 5xx) as down
+            const status = response.status >= 200 && response.status < 400;
+            
+            // Log detailed information for debugging
+            logger.info(`HTTP check for ${url}: status code ${response.status} - ${status ? 'UP' : 'DOWN'}`);
+            
+            return status;
         } catch (error) {
-            logger.error(`HTTP check failed for ${url}: ${error.message}`);
+            // Log detailed error information
+            if (error.response) {
+                // The request was made and the server responded with a status code
+                // that falls out of the range of 2xx
+                logger.error(`HTTP check failed for ${url}: Status ${error.response.status}`);
+            } else if (error.request) {
+                // The request was made but no response was received
+                logger.error(`HTTP check failed for ${url}: No response received`);
+            } else {
+                // Something happened in setting up the request that triggered an Error
+                logger.error(`HTTP check failed for ${url}: ${error.message}`);
+            }
+            
             return false;
         }
     }
@@ -203,15 +224,55 @@ class UptimeMonitor {
 
     async logResult(monitorId, status, responseTime, errorMessage) {
         try {
-            await this.db.execute(
-                'INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at) VALUES (?, ?, ?, ?, CONVERT_TZ(NOW(), "UTC", ?))',
-                [monitorId, status, responseTime, errorMessage, config.timezone || 'America/Detroit']
+            // Get monitor info for more detailed logging
+            const [monitorRows] = await this.db.execute(
+                'SELECT name, url, type FROM monitors WHERE id = ?',
+                [monitorId]
             );
+            
+            if (monitorRows.length === 0) {
+                logger.error(`Failed to log result: Monitor with ID ${monitorId} not found`);
+                return;
+            }
+            
+            const monitor = monitorRows[0];
+            
+            // Get previous status for comparison
+            const previousStatus = await this.getPreviousStatus(monitorId);
+            
+            // Insert the new log entry
+            await this.db.execute(
+                'INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at) VALUES (?, ?, ?, ?, NOW())',
+                [monitorId, status ? 1 : 0, responseTime, errorMessage]
+            );
+            
+            // Log detailed information
+            if (status) {
+                logger.info(`Monitor ${monitorId} (${monitor.name}) is UP`, {
+                    monitorId,
+                    name: monitor.name,
+                    url: monitor.url,
+                    type: monitor.type,
+                    status: 'UP',
+                    responseTime,
+                    statusChanged: previousStatus !== null && previousStatus !== status
+                });
+            } else {
+                logger.error(`Monitor ${monitorId} (${monitor.name}) is DOWN`, {
+                    monitorId,
+                    name: monitor.name,
+                    url: monitor.url,
+                    type: monitor.type,
+                    status: 'DOWN',
+                    error: errorMessage,
+                    statusChanged: previousStatus !== null && previousStatus !== status
+                });
+            }
             
             monitorCheck(monitorId, status, responseTime, errorMessage);
         } catch (error) {
+            logger.error(`Error logging result for monitor ${monitorId}:`, error);
             monitorError(monitorId, error);
-            throw error;
         }
     }
 

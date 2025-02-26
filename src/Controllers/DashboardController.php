@@ -32,23 +32,47 @@ class DashboardController extends BaseController {
     private function getMonitorStats() {
         $userId = $this->auth->getCurrentUser()['id'];
         
+        // First, let's debug what's happening with the statuses
+        $debugSql = "SELECT m.id, m.name, ml.status, ml.checked_at
+                    FROM monitors m
+                    LEFT JOIN (
+                        SELECT ml.*
+                        FROM monitor_logs ml
+                        INNER JOIN (
+                            SELECT monitor_id, MAX(checked_at) as max_checked_at
+                            FROM monitor_logs
+                            GROUP BY monitor_id
+                        ) latest ON ml.monitor_id = latest.monitor_id AND ml.checked_at = latest.max_checked_at
+                    ) ml ON m.id = ml.monitor_id
+                    WHERE m.user_id = ?";
+        
+        $debugResults = $this->db->query($debugSql, [$userId])->fetchAll();
+        
+        // Log the debug info
+        $logger = \Core\Logger::getInstance();
+        $logger->info('Debug monitor statuses: ' . json_encode($debugResults));
+        
+        // Improved query that more reliably determines monitor statuses
         $sql = "SELECT 
-            COUNT(*) as total_monitors,
-            SUM(CASE WHEN ml.status = 1 THEN 1 ELSE 0 END) as monitors_up,
-            SUM(CASE WHEN ml.status = 0 THEN 1 ELSE 0 END) as monitors_down
+            COUNT(m.id) as total_monitors,
+            SUM(CASE WHEN latest_logs.status = 1 THEN 1 ELSE 0 END) as monitors_up,
+            SUM(CASE WHEN latest_logs.status = 0 OR latest_logs.status IS NULL THEN 1 ELSE 0 END) as monitors_down
         FROM monitors m
         LEFT JOIN (
-            SELECT monitor_id, status
-            FROM monitor_logs ml1
-            WHERE checked_at = (
-                SELECT MAX(checked_at)
-                FROM monitor_logs ml2
-                WHERE ml2.monitor_id = ml1.monitor_id
-            )
-        ) ml ON m.id = ml.monitor_id
+            SELECT ml.*
+            FROM monitor_logs ml
+            INNER JOIN (
+                SELECT monitor_id, MAX(checked_at) as max_checked_at
+                FROM monitor_logs
+                GROUP BY monitor_id
+            ) latest ON ml.monitor_id = latest.monitor_id AND ml.checked_at = latest.max_checked_at
+        ) latest_logs ON m.id = latest_logs.monitor_id
         WHERE m.user_id = ?";
         
         $result = $this->db->query($sql, [$userId])->fetch();
+        
+        // Log the result
+        $logger->info('Monitor stats: ' . json_encode($result));
         
         return [
             'total' => $result['total_monitors'] ?? 0,
@@ -65,7 +89,7 @@ class DashboardController extends BaseController {
                 JOIN monitors m ON m.id = ml.monitor_id
                 WHERE m.user_id = ? AND ml.status = 0
                 ORDER BY ml.checked_at DESC
-                LIMIT 5";
+                LIMIT 20";
         
         return $this->db->query($sql, [$userId])->fetchAll();
     }

@@ -15,18 +15,46 @@ class MonitorController extends BaseController {
     public function index() {
         $userId = $this->auth->getCurrentUser()['id'];
         
-        $sql = "SELECT m.*, 
-                    (SELECT status FROM monitor_logs 
-                     WHERE monitor_id = m.id 
-                     ORDER BY checked_at DESC LIMIT 1) as current_status,
-                    (SELECT response_time FROM monitor_logs 
-                     WHERE monitor_id = m.id 
-                     ORDER BY checked_at DESC LIMIT 1) as last_response_time
+        // Debug: Log the raw status logs for the first few monitors
+        $debugSql = "SELECT m.id, m.name, ml.checked_at, ml.status, ml.error_message 
+                    FROM monitors m 
+                    JOIN monitor_logs ml ON m.id = ml.monitor_id
+                    WHERE m.user_id = ?
+                    ORDER BY m.id, ml.checked_at DESC
+                    LIMIT 20";
+        $debugLogs = $this->db->query($debugSql, [$userId])->fetchAll();
+        
+        // Add debug logging
+        $logger = \Core\Logger::getInstance();
+        $logger->info('Recent monitor logs: ' . json_encode($debugLogs));
+        
+        // Use this more reliable query to get the latest status
+        $sql = "SELECT m.*,
+                    latest_logs.status as current_status,
+                    latest_logs.response_time as last_response_time,
+                    latest_logs.checked_at as last_checked,
+                    latest_logs.error_message as latest_error
                 FROM monitors m 
-                WHERE user_id = ?
+                LEFT JOIN (
+                    SELECT ml.*
+                    FROM monitor_logs ml
+                    INNER JOIN (
+                        SELECT monitor_id, MAX(checked_at) as max_checked_at
+                        FROM monitor_logs
+                        GROUP BY monitor_id
+                    ) as latest ON ml.monitor_id = latest.monitor_id AND ml.checked_at = latest.max_checked_at
+                ) as latest_logs ON m.id = latest_logs.monitor_id
+                WHERE m.user_id = ?
                 ORDER BY m.name ASC";
         
         $monitors = $this->db->query($sql, [$userId])->fetchAll();
+        
+        // Debug: Log the status of monitors
+        foreach ($monitors as $monitor) {
+            $logger->info("Monitor {$monitor['id']} ({$monitor['name']}) status: " . 
+                ($monitor['current_status'] ? 'UP' : 'DOWN') . 
+                ", Last checked: {$monitor['last_checked']}, Error: {$monitor['latest_error']}");
+        }
         
         $this->view('monitors/list', ['monitors' => $monitors]);
     }
@@ -229,30 +257,67 @@ class MonitorController extends BaseController {
     }
 
     private function startMonitor($id) {
+        $logger = \Core\Logger::getInstance();
+        $logger->info("Attempting to start monitor: " . $id);
+        
         // Make API call to Node.js service
         $ch = curl_init('http://localhost:3000/api/monitors/start');
         curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['monitorId' => $id]));
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['monitorId' => (int)$id]));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10); // Add a timeout
         $result = curl_exec($ch);
+        
+        $error = curl_error($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        
+        if ($error) {
+            $logger->error("Failed to start monitor {$id}: " . $error);
+            return false;
+        }
+        
+        $logger->info("Start monitor API response: " . $result);
         return $result;
     }
 
     private function stopMonitor($id) {
+        $logger = \Core\Logger::getInstance();
+        $logger->info("Attempting to stop monitor: " . $id);
+        
         $ch = curl_init('http://localhost:3000/api/monitors/stop');
         curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['monitorId' => $id]));
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['monitorId' => (int)$id]));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         $result = curl_exec($ch);
+        
+        $error = curl_error($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        
+        if ($error) {
+            $logger->error("Failed to stop monitor {$id}: " . $error);
+            return false;
+        }
+        
+        $logger->info("Stop monitor API response: " . $result);
         return $result;
     }
 
     private function restartMonitor($id) {
-        $this->stopMonitor($id);
-        return $this->startMonitor($id);
+        $logger = \Core\Logger::getInstance();
+        $logger->info("Restarting monitor: " . $id);
+        
+        $stopResult = $this->stopMonitor($id);
+        
+        // Sleep briefly to ensure the monitor is fully stopped
+        sleep(1);
+        
+        $startResult = $this->startMonitor($id);
+        
+        return $startResult;
     }
 }
