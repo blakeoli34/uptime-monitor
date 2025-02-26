@@ -3,8 +3,8 @@
 
     <footer class="footer">
         <div class="content has-text-centered">
-            <p style="display: flex; align-items: center; justify-content: center;">
-                <img style="max-height: 20px; margin-right: 6px;" src="/images/uptime-logo.png" alt="<?= $config['app']['name'] ?> Logo"><strong><?= $config['app']['name'] ?></strong>. &copy; <?php echo date('Y'); ?>. All rights reserved.
+            <p style="display: flex; align-items: center; justify-content: center; flex-flow: row wrap;">
+                <img style="max-height: 20px; margin-right: 6px;" src="/images/uptime-logo.png" alt="<?= $config['app']['name'] ?> Logo"><strong><?= $config['app']['name'] ?>.</strong><span>&nbsp;&copy; <?php echo date('Y'); ?>. Proudly Designed &amp; Built by <a href="https://jointlystudios.com/" target="_blank">Jointly&nbsp;Studios</a>. All&nbsp;rights&nbsp;reserved.</span>
             </p>
         </div>
     </footer>
