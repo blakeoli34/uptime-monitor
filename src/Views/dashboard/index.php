@@ -48,11 +48,12 @@
                     <p class="has-text-grey">No incidents in the last 24 hours.</p>
                 <?php else: ?>
                     <table class="table is-fullwidth">
-                        <thead>
+                    <thead>
                             <tr>
                                 <th>Monitor</th>
                                 <th>Error</th>
-                                <th>Time</th>
+                                <th>Started At</th>
+                                <th>Duration</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -60,7 +61,14 @@
                             <tr>
                                 <td><?= htmlspecialchars($incident['name']) ?></td>
                                 <td><?= htmlspecialchars($incident['error_message'] ?? 'No error message found') ?></td>
-                                <td><?= (new DateTime($incident['checked_at']))->format('Y-m-d H:i:s') ?></td>
+                                <td><?= (new DateTime($incident['started_at']))->format('Y-m-d H:i:s') ?></td>
+                                <td>
+                                    <?php if ($incident['ended_at']): ?>
+                                        <?= $this->formatUptime($incident['duration_seconds']) ?>
+                                    <?php else: ?>
+                                        <span class="has-text-danger">Ongoing</span>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>

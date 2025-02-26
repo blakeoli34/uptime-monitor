@@ -284,42 +284,82 @@ class StatusPageController extends BaseController {
         $this->redirect('/status-pages');
     }
 
-    public function formatUptime($timestamp) {
-        if (!$timestamp) return 'just now';
+    public function formatUptime($input) {
+        // If the input is a timestamp string
+        if (is_string($input) && !is_numeric($input)) {
+            if (!$input) return 'just now';
+            
+            // Create DateTime objects
+            $now = new \DateTime();
+            $uptime = new \DateTime($input);
+            
+            // Calculate difference
+            $diff = $now->diff($uptime);
+            
+            // Only return "just now" if truly just now (less than 30 seconds)
+            if ($diff->days == 0 && $diff->h == 0 && $diff->i == 0 && $diff->s < 30) {
+                return 'just now';
+            }
         
-        // Create DateTime objects
-        $now = new \DateTime();
-        $uptime = new \DateTime($timestamp);
+            if ($diff->y > 0) {
+                return $diff->y . ' year' . ($diff->y > 1 ? 's' : '') . ', ' . 
+                    $diff->m . ' month' . ($diff->m > 1 ? 's' : '');
+            }
+            if ($diff->m > 0) {
+                return $diff->m . ' month' . ($diff->m > 1 ? 's' : '') . ', ' . 
+                    $diff->d . ' day' . ($diff->d > 1 ? 's' : '');
+            }
+            if ($diff->d > 0) {
+                return $diff->d . ' day' . ($diff->d > 1 ? 's' : '') . ', ' . 
+                    $diff->h . ' hour' . ($diff->h > 1 ? 's' : '');
+            }
+            if ($diff->h > 0) {
+                return $diff->h . ' hour' . ($diff->h > 1 ? 's' : '') . ', ' . 
+                    $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
+            }
+            if ($diff->i > 0) {
+                return $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
+            }
+            
+            return $diff->s . ' second' . ($diff->s > 1 ? 's' : '');
+        }
+        // If the input is seconds (as number or numeric string)
+        else if (is_numeric($input)) {
+            $seconds = (int)$input;
+            $minutes = floor($seconds / 60);
+            $hours = floor($minutes / 60);
+            $days = floor($hours / 24);
+            $months = floor($days / 30);
+            $years = floor($months / 12);
+            
+            if ($seconds < 30) {
+                return 'just now';
+            }
+            
+            if ($years > 0) {
+                return $years . ' year' . ($years > 1 ? 's' : '') . ', ' . 
+                    ($months % 12) . ' month' . (($months % 12) > 1 ? 's' : '');
+            }
+            if ($months > 0) {
+                return $months . ' month' . ($months > 1 ? 's' : '') . ', ' . 
+                    ($days % 30) . ' day' . (($days % 30) > 1 ? 's' : '');
+            }
+            if ($days > 0) {
+                return $days . ' day' . ($days > 1 ? 's' : '') . ', ' . 
+                    ($hours % 24) . ' hour' . (($hours % 24) > 1 ? 's' : '');
+            }
+            if ($hours > 0) {
+                return $hours . ' hour' . ($hours > 1 ? 's' : '') . ', ' . 
+                    ($minutes % 60) . ' minute' . (($minutes % 60) > 1 ? 's' : '');
+            }
+            if ($minutes > 0) {
+                return $minutes . ' minute' . ($minutes > 1 ? 's' : '');
+            }
+            
+            return $seconds . ' second' . ($seconds > 1 ? 's' : '');
+        }
         
-        // Calculate difference
-        $diff = $now->diff($uptime);
-        
-        // Only return "just now" if truly just now (less than 30 seconds)
-        if ($diff->days == 0 && $diff->h == 0 && $diff->i == 0 && $diff->s < 30) {
-            return 'just now';
-        }
-    
-        if ($diff->y > 0) {
-            return $diff->y . ' year' . ($diff->y > 1 ? 's' : '') . ', ' . 
-                $diff->m . ' month' . ($diff->m > 1 ? 's' : '');
-        }
-        if ($diff->m > 0) {
-            return $diff->m . ' month' . ($diff->m > 1 ? 's' : '') . ', ' . 
-                $diff->d . ' day' . ($diff->d > 1 ? 's' : '');
-        }
-        if ($diff->d > 0) {
-            return $diff->d . ' day' . ($diff->d > 1 ? 's' : '') . ', ' . 
-                $diff->h . ' hour' . ($diff->h > 1 ? 's' : '');
-        }
-        if ($diff->h > 0) {
-            return $diff->h . ' hour' . ($diff->h > 1 ? 's' : '') . ', ' . 
-                $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
-        }
-        if ($diff->i > 0) {
-            return $diff->i . ' minute' . ($diff->i > 1 ? 's' : '');
-        }
-        
-        return $diff->s . ' second' . ($diff->s > 1 ? 's' : '');
+        return 'unknown duration';
     }
 
 
@@ -432,26 +472,34 @@ class StatusPageController extends BaseController {
     
         unset($monitor);
      
-        // Get incident history
+        // Get incident history with better duration calculation
         $sql = "SELECT 
             m.name as monitor_name,
             ml_start.checked_at as started_at,
-            TIMEDIFF(ml_end.checked_at, ml_start.checked_at) as duration
+            ml_end.checked_at as ended_at,
+            TIMESTAMPDIFF(SECOND, ml_start.checked_at, ml_end.checked_at) as duration_seconds,
+            ml_start.error_message
         FROM monitor_logs ml_start
         JOIN monitors m ON m.id = ml_start.monitor_id
-        JOIN monitor_logs ml_end ON ml_end.monitor_id = ml_start.monitor_id
         JOIN status_page_monitors spm ON spm.monitor_id = m.id
+        LEFT JOIN (
+            SELECT monitor_id, MIN(checked_at) as checked_at
+            FROM monitor_logs
+            WHERE status = 1
+            GROUP BY monitor_id, (
+                SELECT COUNT(*) 
+                FROM monitor_logs ml2 
+                WHERE ml2.monitor_id = monitor_logs.monitor_id 
+                AND ml2.status = 0 
+                AND ml2.checked_at < monitor_logs.checked_at
+            )
+        ) ml_end ON ml_end.monitor_id = ml_start.monitor_id 
+            AND ml_end.checked_at > ml_start.checked_at
         WHERE ml_start.status = 0 
         AND ml_start.checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         AND spm.status_page_id = ?
-        AND ml_end.checked_at = (
-            SELECT MIN(checked_at) 
-            FROM monitor_logs 
-            WHERE monitor_id = ml_start.monitor_id 
-            AND checked_at > ml_start.checked_at 
-            AND status = 1
-        )
-        ORDER BY ml_start.checked_at DESC";
+        ORDER BY ml_start.checked_at DESC
+        LIMIT 30";
     
         $incidents = $this->db->query($sql, [$page['id']])->fetchAll();
         

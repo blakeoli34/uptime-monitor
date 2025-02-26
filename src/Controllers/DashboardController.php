@@ -84,12 +84,33 @@ class DashboardController extends BaseController {
     private function getRecentIncidents() {
         $userId = $this->auth->getCurrentUser()['id'];
         
-        $sql = "SELECT m.name, ml.status, ml.error_message, ml.checked_at 
-                FROM monitor_logs ml
-                JOIN monitors m ON m.id = ml.monitor_id
-                WHERE m.user_id = ? AND ml.status = 0
-                ORDER BY ml.checked_at DESC
-                LIMIT 20";
+        $sql = "SELECT 
+                m.name, 
+                ml_start.status, 
+                ml_start.error_message, 
+                ml_start.checked_at as started_at,
+                ml_end.checked_at as ended_at,
+                TIMESTAMPDIFF(SECOND, ml_start.checked_at, COALESCE(ml_end.checked_at, NOW())) as duration_seconds
+            FROM monitor_logs ml_start
+            JOIN monitors m ON m.id = ml_start.monitor_id
+            LEFT JOIN (
+                SELECT monitor_id, MIN(checked_at) as checked_at
+                FROM monitor_logs
+                WHERE status = 1
+                GROUP BY monitor_id, (
+                    SELECT COUNT(*) 
+                    FROM monitor_logs ml2 
+                    WHERE ml2.monitor_id = monitor_logs.monitor_id 
+                    AND ml2.status = 0 
+                    AND ml2.checked_at < monitor_logs.checked_at
+                )
+            ) ml_end ON ml_end.monitor_id = ml_start.monitor_id 
+                AND ml_end.checked_at > ml_start.checked_at
+            WHERE m.user_id = ? 
+            AND ml_start.status = 0
+            AND ml_start.checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            ORDER BY ml_start.checked_at DESC
+            LIMIT 20";
         
         return $this->db->query($sql, [$userId])->fetchAll();
     }
@@ -110,5 +131,33 @@ class DashboardController extends BaseController {
                 GROUP BY m.id, m.name";
         
         return $this->db->query($sql, [$userId])->fetchAll();
+    }
+    
+    private function formatUptime($seconds) {
+        if ($seconds === null) return 'just now';
+        
+        $minutes = floor($seconds / 60);
+        $hours = floor($minutes / 60);
+        $days = floor($hours / 24);
+        
+        if ($seconds < 30) {
+            return 'just now';
+        }
+        
+        if ($days > 0) {
+            return $days . ' day' . ($days > 1 ? 's' : '') . ', ' . 
+                ($hours % 24) . ' hour' . (($hours % 24) > 1 ? 's' : '');
+        }
+        
+        if ($hours > 0) {
+            return $hours . ' hour' . ($hours > 1 ? 's' : '') . ', ' . 
+                ($minutes % 60) . ' minute' . (($minutes % 60) > 1 ? 's' : '');
+        }
+        
+        if ($minutes > 0) {
+            return $minutes . ' minute' . ($minutes > 1 ? 's' : '');
+        }
+        
+        return $seconds . ' second' . ($seconds > 1 ? 's' : '');
     }
 }

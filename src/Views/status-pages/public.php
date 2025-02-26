@@ -243,11 +243,16 @@ function getStatusColor($uptime) {
                                 <?php
                                     $date = new DateTime($incident['started_at']);
                                     $date->setTimezone(new DateTimeZone(Config::get('timezone') ?: 'America/Detroit'));
-                                    echo $date->format('Y-m-d H:i:s');
+                                    echo $date->format('n/j/Y g:ia');
                                 ?>
                             </p>
                         </div>
-                        <p class="has-text-grey is-size-7">Duration: <?= $formatUptime($incident['duration']) ?></p>
+                        <p class="has-text-grey is-size-7">
+                            Duration: <?= isset($incident['ended_at']) && $incident['ended_at'] ? $formatUptime($incident['duration_seconds']) : 'Ongoing' ?>
+                            <?php if (isset($incident['error_message']) && $incident['error_message']): ?>
+                                <br>Error: <?= htmlspecialchars($incident['error_message']) ?>
+                            <?php endif; ?>
+                        </p>
                     </div>
                 <?php endforeach; ?>
             <?php endif; ?>
