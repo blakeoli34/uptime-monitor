@@ -3,8 +3,8 @@
 
     <footer class="footer">
         <div class="content has-text-centered">
-            <p>
-                <strong><?= $config['app']['name'] ?></strong> by Jointly Studios. &copy; <?php echo date('Y'); ?>. All rights reserved.
+            <p style="display: flex; align-items: center; justify-content: center;">
+                <img style="max-height: 20px; margin-right: 6px;" src="/images/uptime-logo.png" alt="<?= $config['app']['name'] ?> Logo"><strong><?= $config['app']['name'] ?></strong>. &copy; <?php echo date('Y'); ?>. All rights reserved.
             </p>
         </div>
     </footer>

@@ -7,7 +7,7 @@
         </div>
         <div class="level-right">
             <div class="level-item">
-                <a href="/monitors/add" class="button is-primary">
+                <a href="/monitors/add" class="button">
                     <span class="icon">
                         <i class="fas fa-plus"></i>
                     </span>
@@ -92,7 +92,7 @@
                         <div class="level is-mobile">
                             <div class="level-left">
                                 <div class="level-item">
-                                    <span class="tag <?= $monitor['type'] === 'http' ? 'is-info' : 'is-warning' ?>">
+                                    <span class="tag is-dark">
                                         <?= strtoupper($monitor['type']) ?>
                                     </span>
                                 </div>

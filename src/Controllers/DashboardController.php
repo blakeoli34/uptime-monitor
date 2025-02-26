@@ -84,6 +84,7 @@ class DashboardController extends BaseController {
 
     private function getRecentIncidents() {
         $userId = $this->auth->getCurrentUser()['id'];
+        $timezone = \Core\Config::get('timezone') ?: 'America/Detroit';
         
         $sql = "WITH incident_groups AS (
             SELECT 
@@ -139,7 +140,25 @@ class DashboardController extends BaseController {
         ORDER BY started_at DESC
         LIMIT 20";
         
-        return $this->db->query($sql, [$userId])->fetchAll();
+        $incidents = $this->db->query($sql, [$userId])->fetchAll();
+        
+        // Convert timestamps to the configured timezone
+        foreach ($incidents as &$incident) {
+            if ($incident['started_at']) {
+                $dateUtc = new \DateTime($incident['started_at'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $incident['started_at'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+            
+            if ($incident['ended_at']) {
+                $dateUtc = new \DateTime($incident['ended_at'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $incident['ended_at'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+        }
+        unset($incident);
+        
+        return $incidents;
     }
 
     private function getUptimeOverview() {

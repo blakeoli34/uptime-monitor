@@ -285,13 +285,16 @@ class StatusPageController extends BaseController {
     }
 
     public function formatUptime($input) {
+        // Get timezone
+        $timezone = Config::get('timezone') ?: 'America/Detroit';
+        
         // If the input is a timestamp string
         if (is_string($input) && !is_numeric($input)) {
             if (!$input) return 'just now';
             
-            // Create DateTime objects
-            $now = new \DateTime();
-            $uptime = new \DateTime($input);
+            // Create DateTime objects with proper timezone
+            $now = new \DateTime('now', new \DateTimeZone($timezone));
+            $uptime = new \DateTime($input, new \DateTimeZone($timezone));
             
             // Calculate difference
             $diff = $now->diff($uptime);
@@ -365,7 +368,9 @@ class StatusPageController extends BaseController {
 
     // Public status page view
     public function show($slug) {
-        date_default_timezone_set(Config::get('timezone') ?: 'America/Detroit');
+        // Get the configured timezone
+        $timezone = Config::get('timezone') ?: 'America/Detroit';
+        date_default_timezone_set($timezone);
         
         $sql = "SELECT sp.*, u.username as owner
                 FROM status_pages sp
@@ -377,57 +382,61 @@ class StatusPageController extends BaseController {
         if (!$page) {
             $this->error('Status page not found', 404);
         }
-     
+        
         // Get monitors basic info
-        $sql = "SELECT m.*,
+        $sql = "SELECT m.*, 
                 COALESCE(ml.status, 0) as current_status,
-                ml.response_time as last_response_time,
                 ml.checked_at as last_checked,
-                ml.error_message as latest_error,
-                GREATEST(
-                    m.created_at,
-                    COALESCE(
-                        (
-                            SELECT checked_at 
-                            FROM monitor_logs t1
-                            WHERE t1.monitor_id = m.id
-                            AND t1.status = COALESCE(ml.status, 0)
-                            AND t1.checked_at >= m.created_at
-                            AND NOT EXISTS (
-                                SELECT 1 
-                                FROM monitor_logs t2
-                                WHERE t2.monitor_id = t1.monitor_id
-                                AND t2.checked_at > t1.checked_at
-                                AND t2.status != t1.status
-                            )
-                            ORDER BY t1.checked_at ASC
-                            LIMIT 1
-                        ),
-                        m.created_at
+                (
+                    SELECT checked_at 
+                    FROM monitor_logs t1
+                    WHERE t1.monitor_id = m.id
+                    AND t1.status = COALESCE(ml.status, 0)
+                    AND NOT EXISTS (
+                        SELECT 1 
+                        FROM monitor_logs t2
+                        WHERE t2.monitor_id = t1.monitor_id
+                        AND t2.checked_at > t1.checked_at
+                        AND t2.status != t1.status
                     )
+                    ORDER BY t1.checked_at ASC
+                    LIMIT 1
                 ) as status_since
-            FROM monitors m
-            JOIN status_page_monitors spm ON spm.monitor_id = m.id
-            LEFT JOIN (
-                SELECT ml1.*
-                FROM monitor_logs ml1
-                INNER JOIN (
-                    SELECT monitor_id, MAX(checked_at) as max_checked_at
-                    FROM monitor_logs
-                    GROUP BY monitor_id
-                ) ml2 ON ml1.monitor_id = ml2.monitor_id AND ml1.checked_at = ml2.max_checked_at
-            ) ml ON m.id = ml.monitor_id
-            WHERE spm.status_page_id = ?
-            ORDER BY m.name ASC";
-     
+                FROM monitors m
+                JOIN status_page_monitors spm ON spm.monitor_id = m.id
+                LEFT JOIN (
+                    SELECT ml1.monitor_id, ml1.status, ml1.checked_at
+                    FROM monitor_logs ml1
+                    INNER JOIN (
+                        SELECT monitor_id, MAX(checked_at) as max_checked_at
+                        FROM monitor_logs
+                        GROUP BY monitor_id
+                    ) ml2 ON ml1.monitor_id = ml2.monitor_id AND ml1.checked_at = ml2.max_checked_at
+                ) ml ON m.id = ml.monitor_id
+                WHERE spm.status_page_id = ?
+                ORDER BY m.name ASC";
+        
         $monitors = $this->db->query($sql, [$page['id']])->fetchAll();
     
         foreach ($monitors as &$monitor) {
+            // Convert timestamps to the configured timezone
+            if ($monitor['status_since']) {
+                $dateUtc = new \DateTime($monitor['status_since'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $monitor['status_since'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+            
+            if ($monitor['last_checked']) {
+                $dateUtc = new \DateTime($monitor['last_checked'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $monitor['last_checked'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+            
             $monitor['up_since'] = $monitor['current_status'] ? $monitor['status_since'] : null;
             $monitor['down_since'] = $monitor['current_status'] ? null : $monitor['status_since'];
         }
         unset($monitor);
-     
+        
         // Get daily status for each monitor
         foreach ($monitors as &$monitor) {
             $sql = "WITH RECURSIVE dates AS (
@@ -458,30 +467,30 @@ class StatusPageController extends BaseController {
                 GROUP BY DATE(checked_at)
             ) ml ON ml.check_date = d.date
             ORDER BY d.date ASC";
-     
+            
             $monitor['daily_status'] = $this->db->query($sql, [$monitor['created_at'], $monitor['id']])->fetchAll();
-     
+            
             // Calculate uptime percentage
             $activeChecks = array_filter($monitor['daily_status'], function($day) use ($monitor) {
                 return $day['date'] >= substr($monitor['created_at'], 0, 10);
             });
-     
+            
             $totalUptime = 0;
             $days = 0;
-     
+            
             foreach ($activeChecks as $day) {
                 if (isset($day['uptime'])) {
                     $totalUptime += $day['uptime'];
                     $days++;
                 }
             }
-     
+            
             $monitor['total_uptime'] = $days > 0 ? $totalUptime / $days : 100;
         }
     
         unset($monitor);
-     
-        // Get incident history with proper grouping - simplified version
+        
+        // Get incident history with proper grouping
         $sql = "WITH incident_groups AS (
             SELECT 
                 m.id as monitor_id,
@@ -490,7 +499,6 @@ class StatusPageController extends BaseController {
                 ml.checked_at,
                 ml.error_message,
                 -- Group consecutive incidents by comparing status changes
-                -- This counts transitions from UP to DOWN to identify distinct incidents
                 SUM(CASE 
                     WHEN ml.status = 0 AND (
                         SELECT COALESCE(prev_ml.status, -1) 
@@ -539,6 +547,23 @@ class StatusPageController extends BaseController {
     
         $incidents = $this->db->query($sql, [$page['id']])->fetchAll();
         
+        // Convert incident timestamps to the configured timezone
+        $timezone = Config::get('timezone') ?: 'America/Detroit';
+        foreach ($incidents as &$incident) {
+            if ($incident['started_at']) {
+                $dateUtc = new \DateTime($incident['started_at'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $incident['started_at'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+            
+            if ($incident['ended_at']) {
+                $dateUtc = new \DateTime($incident['ended_at'], new \DateTimeZone('UTC'));
+                $dateUtc->setTimezone(new \DateTimeZone($timezone));
+                $incident['ended_at'] = $dateUtc->format('Y-m-d H:i:s');
+            }
+        }
+        unset($incident);
+        
         // Calculate system status
         $allUp = true;
         $allDown = true;
@@ -553,16 +578,21 @@ class StatusPageController extends BaseController {
         unset($monitor);
         
         $partialOutage = !$allUp && !$allDown;
-    
         
-        $this->view('status-pages/public', [
+        // Instead of using the standard view method, we'll include the files directly
+        // to allow for a custom title
+        extract([
             'page' => $page,
             'monitors' => $monitors,
             'incidents' => $incidents,
             'allUp' => $allUp,
             'partialOutage' => $partialOutage,
-            'formatUptime' => [$this, 'formatUptime']
+            'formatUptime' => [$this, 'formatUptime'],
+            'pageTitle' => htmlspecialchars($page['name']) . ' - Status Page'
         ]);
+        
+        // Include the custom view for status pages
+        require __DIR__ . '/../Views/status-pages/public.php';
     }
      
      private function getLastStatusChange($monitorId, $status) {

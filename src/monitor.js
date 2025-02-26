@@ -285,15 +285,17 @@ class UptimeMonitor {
     }
 
     async sendWebhook(monitor, status, responseTime, errorMessage) {
+        var statusName = "UP",
+        statusIcon = "🟢";
+        if(status == 0) {
+            statusName = "DOWN",
+            statusIcon = "🔴";
+        }
         try {
             await axios.post(monitor.webhook_url, {
-                monitorId: monitor.id,
-                name: monitor.name,
-                url: monitor.url,
-                status: status,
-                responseTime: responseTime,
-                errorMessage: errorMessage,
-                timestamp: new Date().toISOString()
+                username: "Uptime Bot",
+                icon_url: "https://uptime.jointlystudios.com/images/uptime-logo.png",
+                text: statusIcon + " " + monitor.name + " is " + statusName
             });
         } catch (error) {
             logger.error(`Error sending webhook for monitor ${monitor.id}:`, error);

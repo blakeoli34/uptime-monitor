@@ -7,11 +7,11 @@
         </div>
         <div class="level-right">
             <div class="level-item">
-                <a href="/status-pages/add" class="button is-primary">
+                <a href="/status-pages/add" class="button">
                     <span class="icon">
                         <i class="fas fa-plus"></i>
                     </span>
-                    <span>Create Status Page</span>
+                    <span>Add Status Page</span>
                 </a>
             </div>
         </div>
@@ -54,7 +54,7 @@
                                                 <a href="/status/<?= $page['slug'] ?>" target="_blank" class="dropdown-item">
                                                     <span class="icon-text">
                                                         <span class="icon"><i class="fas fa-external-link-alt"></i></span>
-                                                        <span>View Public Page</span>
+                                                        <span>View Page</span>
                                                     </span>
                                                 </a>
                                                 <a href="/status-pages/<?= $page['id'] ?>/edit" class="dropdown-item">
@@ -106,7 +106,7 @@
                             <div class="control">
                                 <div class="tags has-addons">
                                     <span class="tag">Monitors</span>
-                                    <span class="tag is-info">
+                                    <span class="tag is-dark">
                                         <?= $page['monitor_count'] ?? '0' ?>
                                     </span>
                                 </div>

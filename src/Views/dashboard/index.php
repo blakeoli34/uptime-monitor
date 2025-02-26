@@ -25,17 +25,17 @@
 
     <!-- Quick Actions -->
     <div class="buttons mb-5">
-        <a href="/monitors/add" class="button is-primary">
+        <a href="/monitors/add" class="button">
             <span class="icon">
                 <i class="fas fa-plus"></i>
             </span>
             <span>Add Monitor</span>
         </a>
-        <a href="/status-pages/add" class="button is-info">
+        <a href="/status-pages/add" class="button">
             <span class="icon">
                 <i class="fas fa-plus"></i>
             </span>
-            <span>Create Status Page</span>
+            <span>Add Status Page</span>
         </a>
     </div>
 
@@ -61,7 +61,7 @@
                             <tr>
                                 <td><?= htmlspecialchars($incident['name']) ?></td>
                                 <td><?= htmlspecialchars($incident['error_message'] ?? 'No error message found') ?></td>
-                                <td><?= (new DateTime($incident['started_at']))->format('Y-m-d H:i:s') ?></td>
+                                <td><?= (new DateTime($incident['started_at']))->format('n/j/Y g:ia') ?></td>
                                 <td>
                                     <?php if ($incident['ended_at']): ?>
                                         <?= $this->formatUptime($incident['duration_seconds']) ?>

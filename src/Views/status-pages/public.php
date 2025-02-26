@@ -11,7 +11,15 @@ function getStatusColor($uptime) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= htmlspecialchars($page['name']) ?></title>
+    <title><?= $pageTitle ?></title>
+    
+    <!-- Favicon -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16.png">
+    <link rel="manifest" href="/images/site.webmanifest">
+    <link rel="shortcut icon" href="/images/favicon.ico">
+    
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
     <meta http-equiv="refresh" content="60">
     <style>
@@ -104,6 +112,14 @@ function getStatusColor($uptime) {
         .down {
             color: #f14668;
         }
+        .incident-container {
+            border-bottom: 1px solid #eee;
+        }
+        .incident-container:last-child {
+            border-bottom: none;
+            margin-bottom: 0 !important;
+            padding-bottom: 0 !important;
+        }
     </style>
     <style>
         @media (prefers-color-scheme: dark) {
@@ -165,9 +181,12 @@ function getStatusColor($uptime) {
     </style>
 </head>
 <body>
-    <section class="section">
+<section class="section">
         <div class="container">
-            <h1 class="title is-2 mb-2"><?= htmlspecialchars($page['name']) ?></h1>
+            <div class="is-flex is-align-items-center mb-5">
+                <img src="/images/uptime-logo.png" alt="Logo" style="height: 40px; margin-right: 15px;">
+                <h1 class="title is-2 mb-0"><?= htmlspecialchars($page['name']) ?></h1>
+            </div>
             <p class="is-size-4 mb-6"><?= html_entity_decode(htmlspecialchars($page['description'])) ?></p>
 
             <!-- System Status Box -->
@@ -219,7 +238,7 @@ function getStatusColor($uptime) {
                             title="<?php 
                                 $date = new DateTime($day['date']);
                                 $date->setTimezone(new DateTimeZone(Config::get('timezone') ?: 'America/Detroit'));
-                                echo $date->format('Y-m-d');
+                                echo $date->format('n/j/Y');
                             ?><?= $day['date'] < $monitor['created_at'] ? ': Monitor not created yet' : ': ' . number_format($day['uptime'] ?? 100, 1) . '% uptime' ?>">
                         </div>
                     <?php endforeach; ?>
@@ -230,32 +249,33 @@ function getStatusColor($uptime) {
         </div>
 
         <!-- Incident History -->
-        <div class="box mt-6">
-            <h2 class="title is-4 mb-4">Incident History</h2>
-            <?php if (empty($incidents)): ?>
-                <p class="has-text-grey">No incidents in the last 30 days.</p>
-            <?php else: ?>
-                <?php foreach ($incidents as $incident): ?>
-                    <div class="mb-4 pb-4" style="border-bottom: 1px solid #eee;">
-                        <div class="is-flex is-justify-content-space-between mb-2">
-                            <p class="has-text-weight-medium"><?= htmlspecialchars($incident['monitor_name']) ?></p>
+        <div class="container">
+            <div class="box mt-6">
+                <h2 class="title is-4 mb-4">Incident History</h2>
+                <?php if (empty($incidents)): ?>
+                    <p class="has-text-grey">No incidents in the last 30 days.</p>
+                <?php else: ?>
+                    <?php foreach ($incidents as $incident): ?>
+                        <div class="incident-container mb-4 pb-4">
+                            <div class="is-flex is-justify-content-space-between mb-2">
+                                <p class="has-text-weight-medium"><?= htmlspecialchars($incident['monitor_name']) ?></p>
+                                <p class="has-text-grey is-size-7">
+                                    <?php
+                                        $date = new DateTime($incident['started_at']);
+                                        echo $date->format('n/j/Y g:ia');
+                                    ?>
+                                </p>
+                            </div>
                             <p class="has-text-grey is-size-7">
-                                <?php
-                                    $date = new DateTime($incident['started_at']);
-                                    $date->setTimezone(new DateTimeZone(Config::get('timezone') ?: 'America/Detroit'));
-                                    echo $date->format('n/j/Y g:ia');
-                                ?>
+                                Duration: <?= isset($incident['ended_at']) && $incident['ended_at'] ? $formatUptime($incident['duration_seconds']) : 'Ongoing' ?>
+                                <?php if (isset($incident['error_message']) && $incident['error_message']): ?>
+                                    <br>Error: <?= htmlspecialchars($incident['error_message']) ?>
+                                <?php endif; ?>
                             </p>
                         </div>
-                        <p class="has-text-grey is-size-7">
-                            Duration: <?= isset($incident['ended_at']) && $incident['ended_at'] ? $formatUptime($incident['duration_seconds']) : 'Ongoing' ?>
-                            <?php if (isset($incident['error_message']) && $incident['error_message']): ?>
-                                <br>Error: <?= htmlspecialchars($incident['error_message']) ?>
-                            <?php endif; ?>
-                        </p>
-                    </div>
-                <?php endforeach; ?>
-            <?php endif; ?>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
         </div>
     </section>
 

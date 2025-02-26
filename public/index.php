@@ -4,6 +4,54 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+// Handle static image files
+$requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if (strpos($requestUri, '/images/') === 0) {
+    $imagePath = __DIR__ . '/../src' . $requestUri;
+    
+    // If file exists, serve it with appropriate headers
+    if (file_exists($imagePath)) {
+        $extension = pathinfo($imagePath, PATHINFO_EXTENSION);
+        $contentType = 'application/octet-stream'; // Default
+        
+        // Set appropriate content type based on file extension
+        switch(strtolower($extension)) {
+            case 'png':
+                $contentType = 'image/png';
+                break;
+            case 'jpg':
+            case 'jpeg':
+                $contentType = 'image/jpeg';
+                break;
+            case 'svg':
+                $contentType = 'image/svg+xml';
+                break;
+            case 'ico':
+                $contentType = 'image/x-icon';
+                break;
+            case 'webmanifest':
+                $contentType = 'application/manifest+json';
+                header('Content-Disposition: inline');
+                break;
+        }
+        
+        // Cache control
+        $expires = 60*60*24*30; // 30 days
+        header("Pragma: public");
+        header("Cache-Control: max-age=".$expires);
+        header('Expires: ' . gmdate('D, d M Y H:i:s', time()+$expires) . ' GMT');
+        header('Content-Type: ' . $contentType);
+        header('Content-Length: ' . filesize($imagePath));
+        readfile($imagePath);
+        exit;
+    }
+    
+    // If file doesn't exist, return 404
+    header($_SERVER["SERVER_PROTOCOL"] . " 404 Not Found");
+    echo "404 Not Found";
+    exit;
+}
+
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Core\Router;
