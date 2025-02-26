@@ -1,0 +1,80 @@
+# Node.js Backend
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+.npm
+.yarn-integrity
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+coverage/
+.nyc_output/
+dist/
+build/
+config.js
+
+# PHP Frontend
+/vendor/
+composer.lock
+*.log
+.phpunit.result.cache
+/public/hot
+/public/storage
+/storage/*.key
+
+# IDE and Editor folders
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env
+.env.development
+.env.test
+.env.production
+
+# Cache files
+.cache/
+.sass-cache/
+.php_cs.cache
+
+# Temporary files
+tmp/
+temp/
