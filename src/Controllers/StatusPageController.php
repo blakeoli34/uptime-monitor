@@ -379,37 +379,46 @@ class StatusPageController extends BaseController {
         }
      
         // Get monitors basic info
-        $sql = "SELECT m.*, 
+        $sql = "SELECT m.*,
                 COALESCE(ml.status, 0) as current_status,
+                ml.response_time as last_response_time,
                 ml.checked_at as last_checked,
-                (
-                    SELECT checked_at 
-                    FROM monitor_logs t1
-                    WHERE t1.monitor_id = m.id
-                    AND t1.status = COALESCE(ml.status, 0)
-                    AND NOT EXISTS (
-                        SELECT 1 
-                        FROM monitor_logs t2
-                        WHERE t2.monitor_id = t1.monitor_id
-                        AND t2.checked_at > t1.checked_at
-                        AND t2.status != t1.status
+                ml.error_message as latest_error,
+                GREATEST(
+                    m.created_at,
+                    COALESCE(
+                        (
+                            SELECT checked_at 
+                            FROM monitor_logs t1
+                            WHERE t1.monitor_id = m.id
+                            AND t1.status = COALESCE(ml.status, 0)
+                            AND t1.checked_at >= m.created_at
+                            AND NOT EXISTS (
+                                SELECT 1 
+                                FROM monitor_logs t2
+                                WHERE t2.monitor_id = t1.monitor_id
+                                AND t2.checked_at > t1.checked_at
+                                AND t2.status != t1.status
+                            )
+                            ORDER BY t1.checked_at ASC
+                            LIMIT 1
+                        ),
+                        m.created_at
                     )
-                    ORDER BY t1.checked_at ASC
-                    LIMIT 1
                 ) as status_since
-                FROM monitors m
-                JOIN status_page_monitors spm ON spm.monitor_id = m.id
-                LEFT JOIN (
-                    SELECT ml1.monitor_id, ml1.status, ml1.checked_at
-                    FROM monitor_logs ml1
-                    INNER JOIN (
-                        SELECT monitor_id, MAX(checked_at) as max_checked_at
-                        FROM monitor_logs
-                        GROUP BY monitor_id
-                    ) ml2 ON ml1.monitor_id = ml2.monitor_id AND ml1.checked_at = ml2.max_checked_at
-                ) ml ON m.id = ml.monitor_id
-                WHERE spm.status_page_id = ?
-                ORDER BY m.name ASC";
+            FROM monitors m
+            JOIN status_page_monitors spm ON spm.monitor_id = m.id
+            LEFT JOIN (
+                SELECT ml1.*
+                FROM monitor_logs ml1
+                INNER JOIN (
+                    SELECT monitor_id, MAX(checked_at) as max_checked_at
+                    FROM monitor_logs
+                    GROUP BY monitor_id
+                ) ml2 ON ml1.monitor_id = ml2.monitor_id AND ml1.checked_at = ml2.max_checked_at
+            ) ml ON m.id = ml.monitor_id
+            WHERE spm.status_page_id = ?
+            ORDER BY m.name ASC";
      
         $monitors = $this->db->query($sql, [$page['id']])->fetchAll();
     
@@ -472,33 +481,60 @@ class StatusPageController extends BaseController {
     
         unset($monitor);
      
-        // Get incident history with better duration calculation
-        $sql = "SELECT 
-            m.name as monitor_name,
-            ml_start.checked_at as started_at,
-            ml_end.checked_at as ended_at,
-            TIMESTAMPDIFF(SECOND, ml_start.checked_at, ml_end.checked_at) as duration_seconds,
-            ml_start.error_message
-        FROM monitor_logs ml_start
-        JOIN monitors m ON m.id = ml_start.monitor_id
-        JOIN status_page_monitors spm ON spm.monitor_id = m.id
-        LEFT JOIN (
-            SELECT monitor_id, MIN(checked_at) as checked_at
-            FROM monitor_logs
-            WHERE status = 1
-            GROUP BY monitor_id, (
-                SELECT COUNT(*) 
-                FROM monitor_logs ml2 
-                WHERE ml2.monitor_id = monitor_logs.monitor_id 
-                AND ml2.status = 0 
-                AND ml2.checked_at < monitor_logs.checked_at
-            )
-        ) ml_end ON ml_end.monitor_id = ml_start.monitor_id 
-            AND ml_end.checked_at > ml_start.checked_at
-        WHERE ml_start.status = 0 
-        AND ml_start.checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-        AND spm.status_page_id = ?
-        ORDER BY ml_start.checked_at DESC
+        // Get incident history with proper grouping - simplified version
+        $sql = "WITH incident_groups AS (
+            SELECT 
+                m.id as monitor_id,
+                m.name as monitor_name,
+                ml.status,
+                ml.checked_at,
+                ml.error_message,
+                -- Group consecutive incidents by comparing status changes
+                -- This counts transitions from UP to DOWN to identify distinct incidents
+                SUM(CASE 
+                    WHEN ml.status = 0 AND (
+                        SELECT COALESCE(prev_ml.status, -1) 
+                        FROM monitor_logs prev_ml
+                        WHERE prev_ml.monitor_id = m.id
+                        AND prev_ml.checked_at < ml.checked_at
+                        ORDER BY prev_ml.checked_at DESC
+                        LIMIT 1
+                    ) = 1 THEN 1
+                    ELSE 0
+                END) OVER (PARTITION BY m.id ORDER BY ml.checked_at) as incident_group
+            FROM monitor_logs ml
+            JOIN monitors m ON m.id = ml.monitor_id
+            JOIN status_page_monitors spm ON spm.monitor_id = m.id
+            WHERE spm.status_page_id = ?
+            AND ml.checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            ORDER BY m.id, ml.checked_at
+        )
+        SELECT 
+            monitor_name,
+            MIN(CASE WHEN status = 0 THEN checked_at END) as started_at,
+            MIN(CASE WHEN status = 1 AND EXISTS (
+                SELECT 1 FROM incident_groups ig2 
+                WHERE ig2.monitor_id = incident_groups.monitor_id 
+                AND ig2.incident_group = incident_groups.incident_group
+                AND ig2.status = 0
+                AND ig2.checked_at < incident_groups.checked_at
+            ) THEN checked_at END) as ended_at,
+            MIN(CASE WHEN status = 0 THEN error_message END) as error_message,
+            TIMESTAMPDIFF(SECOND, 
+                MIN(CASE WHEN status = 0 THEN checked_at END), 
+                COALESCE(MIN(CASE WHEN status = 1 AND EXISTS (
+                    SELECT 1 FROM incident_groups ig2 
+                    WHERE ig2.monitor_id = incident_groups.monitor_id 
+                    AND ig2.incident_group = incident_groups.incident_group
+                    AND ig2.status = 0
+                    AND ig2.checked_at < incident_groups.checked_at
+                ) THEN checked_at END), NOW())
+            ) as duration_seconds
+        FROM incident_groups
+        WHERE status IN (0, 1)
+        GROUP BY monitor_name, incident_group
+        HAVING MIN(CASE WHEN status = 0 THEN checked_at END) IS NOT NULL
+        ORDER BY started_at DESC
         LIMIT 30";
     
         $incidents = $this->db->query($sql, [$page['id']])->fetchAll();

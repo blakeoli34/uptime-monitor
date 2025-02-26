@@ -7,6 +7,7 @@ use \Core\CSRF;
             <h1 class="title has-text-centered">Register</h1>
             <p class="is-size-7 has-text-centered mb-4">This software is only available to<br>Jointly Studios employees and clients</p>
             
+            <?php if (isset($_GET['invite']) && $_GET['invite'] === 'jointly'): ?>
             <form method="POST" action="/register">
                 <?= \Core\CSRF::getFormField() ?>
                 <div class="field">
@@ -57,10 +58,15 @@ use \Core\CSRF;
                     </div>
                 </div>
             </form>
-
             <p class="has-text-centered mt-4">
                 Already have an account? <a href="/login">Login</a>
             </p>
+            <?php else: ?>
+            <div class="has-text-centered">
+                <p class="has-text-grey mb-4">Registration is currently by invite only.</p>
+                <a href="/login" class="button is-primary">Login</a>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>

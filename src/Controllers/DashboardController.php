@@ -25,7 +25,8 @@ class DashboardController extends BaseController {
         $this->view('dashboard/index', [
             'stats' => $stats,
             'recentIncidents' => $recentIncidents,
-            'uptimeOverview' => $uptimeOverview
+            'uptimeOverview' => $uptimeOverview,
+            'formatUptime' => [$this, 'formatUptime']
         ]);
     }
 
@@ -84,33 +85,59 @@ class DashboardController extends BaseController {
     private function getRecentIncidents() {
         $userId = $this->auth->getCurrentUser()['id'];
         
-        $sql = "SELECT 
-                m.name, 
-                ml_start.status, 
-                ml_start.error_message, 
-                ml_start.checked_at as started_at,
-                ml_end.checked_at as ended_at,
-                TIMESTAMPDIFF(SECOND, ml_start.checked_at, COALESCE(ml_end.checked_at, NOW())) as duration_seconds
-            FROM monitor_logs ml_start
-            JOIN monitors m ON m.id = ml_start.monitor_id
-            LEFT JOIN (
-                SELECT monitor_id, MIN(checked_at) as checked_at
-                FROM monitor_logs
-                WHERE status = 1
-                GROUP BY monitor_id, (
-                    SELECT COUNT(*) 
-                    FROM monitor_logs ml2 
-                    WHERE ml2.monitor_id = monitor_logs.monitor_id 
-                    AND ml2.status = 0 
-                    AND ml2.checked_at < monitor_logs.checked_at
-                )
-            ) ml_end ON ml_end.monitor_id = ml_start.monitor_id 
-                AND ml_end.checked_at > ml_start.checked_at
-            WHERE m.user_id = ? 
-            AND ml_start.status = 0
-            AND ml_start.checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-            ORDER BY ml_start.checked_at DESC
-            LIMIT 20";
+        $sql = "WITH incident_groups AS (
+            SELECT 
+                m.id as monitor_id,
+                m.name,
+                ml.status,
+                ml.checked_at,
+                ml.error_message,
+                -- Group consecutive incidents by comparing status changes
+                SUM(CASE 
+                    WHEN ml.status = 0 AND (
+                        SELECT COALESCE(prev_ml.status, -1) 
+                        FROM monitor_logs prev_ml
+                        WHERE prev_ml.monitor_id = m.id
+                        AND prev_ml.checked_at < ml.checked_at
+                        ORDER BY prev_ml.checked_at DESC
+                        LIMIT 1
+                    ) = 1 THEN 1
+                    ELSE 0
+                END) OVER (PARTITION BY m.id ORDER BY ml.checked_at) as incident_group
+            FROM monitor_logs ml
+            JOIN monitors m ON m.id = ml.monitor_id
+            WHERE m.user_id = ?
+            AND ml.checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            ORDER BY m.id, ml.checked_at
+        )
+        SELECT 
+            name,
+            0 as status,
+            MIN(CASE WHEN status = 0 THEN error_message END) as error_message,
+            MIN(CASE WHEN status = 0 THEN checked_at END) as started_at,
+            MIN(CASE WHEN status = 1 AND EXISTS (
+                SELECT 1 FROM incident_groups ig2 
+                WHERE ig2.monitor_id = incident_groups.monitor_id 
+                AND ig2.incident_group = incident_groups.incident_group
+                AND ig2.status = 0
+                AND ig2.checked_at < incident_groups.checked_at
+            ) THEN checked_at END) as ended_at,
+            TIMESTAMPDIFF(SECOND, 
+                MIN(CASE WHEN status = 0 THEN checked_at END), 
+                COALESCE(MIN(CASE WHEN status = 1 AND EXISTS (
+                    SELECT 1 FROM incident_groups ig2 
+                    WHERE ig2.monitor_id = incident_groups.monitor_id 
+                    AND ig2.incident_group = incident_groups.incident_group
+                    AND ig2.status = 0
+                    AND ig2.checked_at < incident_groups.checked_at
+                ) THEN checked_at END), NOW())
+            ) as duration_seconds
+        FROM incident_groups
+        WHERE status IN (0, 1)
+        GROUP BY name, monitor_id, incident_group
+        HAVING MIN(CASE WHEN status = 0 THEN checked_at END) IS NOT NULL
+        ORDER BY started_at DESC
+        LIMIT 20";
         
         return $this->db->query($sql, [$userId])->fetchAll();
     }
@@ -133,7 +160,7 @@ class DashboardController extends BaseController {
         return $this->db->query($sql, [$userId])->fetchAll();
     }
     
-    private function formatUptime($seconds) {
+    public function formatUptime($seconds) {
         if ($seconds === null) return 'just now';
         
         $minutes = floor($seconds / 60);

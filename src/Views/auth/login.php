@@ -45,10 +45,6 @@ use \Core\CSRF;
                     </div>
                 </div>
             </form>
-
-            <p class="has-text-centered mt-4">
-                Don't have an account? <a href="/register">Register</a>
-            </p>
         </div>
     </div>
 </div>

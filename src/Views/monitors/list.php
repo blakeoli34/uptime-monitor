@@ -80,6 +80,15 @@
                             </span>
                         </p>
 
+                        <p class="has-text-grey is-size-7">
+                            <span class="icon-text">
+                                <span class="icon">
+                                    <i class="fas fa-calendar-alt"></i>
+                                </span>
+                                <span>Created <?= (new DateTime($monitor['created_at']))->format('F j, Y') ?></span>
+                            </span>
+                        </p>
+
                         <div class="level is-mobile">
                             <div class="level-left">
                                 <div class="level-item">
