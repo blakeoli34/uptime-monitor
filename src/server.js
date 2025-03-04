@@ -33,12 +33,12 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Get monitor status
+// Get monitor status endpoint
 app.get('/api/monitors/:id/status', async (req, res) => {
     try {
         const monitorId = req.params.id;
         const [rows] = await monitor.db.execute(
-            'SELECT * FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1',
+            'SELECT current_status, last_check_time, last_response_time, last_error_message FROM monitor_status WHERE monitor_id = ?',
             [monitorId]
         );
 
@@ -51,7 +51,12 @@ app.get('/api/monitors/:id/status', async (req, res) => {
 
         res.json({
             status: 'success',
-            data: rows[0]
+            data: {
+                status: rows[0].current_status,
+                checked_at: rows[0].last_check_time,
+                response_time: rows[0].last_response_time,
+                error_message: rows[0].last_error_message
+            }
         });
     } catch (error) {
         logger.error('Failed to get monitor status', {
@@ -65,26 +70,41 @@ app.get('/api/monitors/:id/status', async (req, res) => {
     }
 });
 
-// Get monitor statistics
+// Get monitor statistics endpoint
 app.get('/api/monitors/:id/stats', async (req, res) => {
     try {
         const monitorId = req.params.id;
-        const [rows] = await monitor.db.execute(
+        
+        // Get today's stats from monitor_status
+        const [todayStats] = await monitor.db.execute(
             `SELECT 
-                COUNT(*) as total_checks,
-                SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) as successful_checks,
-                AVG(response_time) as avg_response_time,
-                MIN(response_time) as min_response_time,
-                MAX(response_time) as max_response_time
-            FROM monitor_logs 
+                todays_checks as total_checks,
+                todays_successful_checks as successful_checks,
+                daily_uptime_percentage as uptime_percentage,
+                last_response_time as last_response_time
+            FROM monitor_status 
+            WHERE monitor_id = ?`,
+            [monitorId]
+        );
+        
+        // Get past 24 hour stats from daily_uptime
+        const [historyStats] = await monitor.db.execute(
+            `SELECT AVG(uptime_percentage) as avg_uptime
+            FROM daily_uptime
             WHERE monitor_id = ? 
-            AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
+            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`,
             [monitorId]
         );
 
         res.json({
             status: 'success',
-            data: rows[0]
+            data: {
+                total_checks: todayStats.length > 0 ? todayStats[0].total_checks : 0,
+                successful_checks: todayStats.length > 0 ? todayStats[0].successful_checks : 0,
+                uptime_percentage: todayStats.length > 0 ? todayStats[0].uptime_percentage : 100,
+                avg_response_time: todayStats.length > 0 ? todayStats[0].last_response_time : null,
+                avg_uptime_24h: historyStats[0].avg_uptime || 100
+            }
         });
     } catch (error) {
         logger.error('Failed to get monitor stats', {

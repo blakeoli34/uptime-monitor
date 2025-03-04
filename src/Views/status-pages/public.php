@@ -1,5 +1,6 @@
 <?php
 use Core\Config;
+error_log("Status page incidents: " . json_encode($incidents));
 function getStatusColor($uptime) {
     if ($uptime >= 99) return '#48c774';
     if ($uptime >= 90) return '#ffdd57';
@@ -267,7 +268,8 @@ function getStatusColor($uptime) {
                                 </p>
                             </div>
                             <p class="has-text-grey is-size-7">
-                                Duration: <?= isset($incident['ended_at']) && $incident['ended_at'] ? $formatUptime($incident['duration_seconds']) : 'Ongoing' ?>
+                                Duration: <?= isset($incident['ended_at']) && $incident['ended_at'] ? 
+                                    $formatUptime($incident['duration_seconds'], false) : 'Ongoing' ?>
                                 <?php if (isset($incident['error_message']) && $incident['error_message']): ?>
                                     <br>Error: <?= htmlspecialchars($incident['error_message']) ?>
                                 <?php endif; ?>

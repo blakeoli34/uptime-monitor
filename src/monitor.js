@@ -104,12 +104,6 @@ class UptimeMonitor {
                 // Log result
                 await this.logResult(monitor.id, status, responseTime, errorMessage);
 
-                // Send webhook if status changed
-                const previousStatus = await this.getPreviousStatus(monitor.id);
-                if (previousStatus !== null && previousStatus !== status && monitor.webhook_url) {
-                    await this.sendWebhook(monitor, status, responseTime, errorMessage);
-                }
-
             } catch (error) {
                 logger.error(`Error checking monitor ${monitor.id}:`, error);
                 await this.logResult(monitor.id, false, null, error.message);
@@ -224,9 +218,9 @@ class UptimeMonitor {
 
     async logResult(monitorId, status, responseTime, errorMessage) {
         try {
-            // Get monitor info for more detailed logging
+            // Get monitor info
             const [monitorRows] = await this.db.execute(
-                'SELECT name, url, type FROM monitors WHERE id = ?',
+                'SELECT name, url, type, webhook_url FROM monitors WHERE id = ?',
                 [monitorId]
             );
             
@@ -237,42 +231,206 @@ class UptimeMonitor {
             
             const monitor = monitorRows[0];
             
-            // Get previous status for comparison
-            const previousStatus = await this.getPreviousStatus(monitorId);
-            
-            // Insert the new log entry
-            await this.db.execute(
-                'INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at) VALUES (?, ?, ?, ?, NOW())',
-                [monitorId, status ? 1 : 0, responseTime, errorMessage]
+            // Get current status and any pending incident information
+            const [statusRows] = await this.db.execute(
+                'SELECT current_status, status_since, last_check_time FROM monitor_status WHERE monitor_id = ?',
+                [monitorId]
             );
             
-            // Log detailed information
-            if (status) {
-                logger.info(`Monitor ${monitorId} (${monitor.name}) is UP`, {
-                    monitorId,
-                    name: monitor.name,
-                    url: monitor.url,
-                    type: monitor.type,
-                    status: 'UP',
-                    responseTime,
-                    statusChanged: previousStatus !== null && previousStatus !== status
-                });
-            } else {
-                logger.error(`Monitor ${monitorId} (${monitor.name}) is DOWN`, {
-                    monitorId,
-                    name: monitor.name,
-                    url: monitor.url,
-                    type: monitor.type,
-                    status: 'DOWN',
-                    error: errorMessage,
-                    statusChanged: previousStatus !== null && previousStatus !== status
-                });
-            }
+            const previousStatus = statusRows.length > 0 ? Boolean(statusRows[0].current_status) : null;
+            const statusChanged = previousStatus !== null && previousStatus !== status;
             
-            monitorCheck(monitorId, status, responseTime, errorMessage);
+            // Begin transaction
+            await this.db.beginTransaction();
+            
+            try {
+                // Update monitor counters and last_check_time in all cases
+                if (statusRows.length === 0) {
+                    // First check for this monitor - insert with current status
+                    await this.db.execute(
+                        `INSERT INTO monitor_status (
+                            monitor_id, current_status, status_since, last_check_time,
+                            last_response_time, last_error_message, todays_checks,
+                            todays_successful_checks, daily_uptime_percentage
+                        ) VALUES (?, ?, NOW(), NOW(), ?, ?, 1, ?, 100)`,
+                        [monitorId, status ? 1 : 0, responseTime, errorMessage, status ? 1 : 0]
+                    );
+                } else {
+                    // For existing monitors, we need to handle status changes carefully
+                    
+                    // Case 1: No status change - just update check time and counters
+                    if (!statusChanged) {
+                        await this.db.execute(
+                            `UPDATE monitor_status SET
+                                last_check_time = NOW(),
+                                last_response_time = ?,
+                                last_error_message = ?,
+                                todays_checks = todays_checks + 1,
+                                todays_successful_checks = todays_successful_checks + ?,
+                                daily_uptime_percentage = (todays_successful_checks * 100.0 / todays_checks)
+                            WHERE monitor_id = ?`,
+                            [responseTime, errorMessage, status ? 1 : 0, monitorId]
+                        );
+                    }
+                    // Case 2: Status changing TO DOWN - track internally but don't update status_since yet
+                    else if (status === false) {
+                        // We'll update current_status but keep the same status_since for now
+                        // This prevents brief outages from affecting "up since" time
+                        await this.db.execute(
+                            `UPDATE monitor_status SET
+                                current_status = 0,
+                                last_check_time = NOW(),
+                                last_response_time = ?,
+                                last_error_message = ?,
+                                todays_checks = todays_checks + 1,
+                                todays_successful_checks = todays_successful_checks + 0,
+                                daily_uptime_percentage = (todays_successful_checks * 100.0 / todays_checks)
+                            WHERE monitor_id = ?`,
+                            [responseTime, errorMessage, monitorId]
+                        );
+                        
+                        // Insert a temporary record to track the start of this potential outage
+                        // We use a table variable or temporary table so it won't affect the status page
+                        await this.db.execute(
+                            `INSERT INTO monitor_potential_outages (monitor_id, started_at, error_message)
+                             VALUES (?, NOW(), ?)
+                             ON DUPLICATE KEY UPDATE started_at = NOW(), error_message = ?`,
+                            [monitorId, errorMessage, errorMessage]
+                        );
+                        
+                        logger.error(`Monitor ${monitorId} (${monitor.name}) changed status to DOWN - tracking potential outage`, {
+                            monitorId,
+                            name: monitor.name,
+                            error: errorMessage
+                        });
+                    }
+                    // Case 3: Status changing TO UP after being DOWN
+                    else if (status === true) {
+                        // Check if we had a potential outage and how long it lasted
+                        const [potentialOutage] = await this.db.execute(
+                            `SELECT started_at, TIMESTAMPDIFF(SECOND, started_at, NOW()) as duration_seconds
+                             FROM monitor_potential_outages
+                             WHERE monitor_id = ?`,
+                            [monitorId]
+                        );
+                        
+                        // If there was a potential outage that lasted 2+ minutes
+                        if (potentialOutage.length > 0 && potentialOutage[0].duration_seconds >= 120) {
+                            // 1. Update status_since to the outage start time (we're now officially considering this significant)
+                            await this.db.execute(
+                                `UPDATE monitor_status SET
+                                    current_status = 1,
+                                    status_since = NOW(), -- Reset status_since to now (recovery time)
+                                    last_check_time = NOW(),
+                                    last_response_time = ?,
+                                    last_error_message = ?,
+                                    todays_checks = todays_checks + 1,
+                                    todays_successful_checks = todays_successful_checks + 1,
+                                    daily_uptime_percentage = (todays_successful_checks * 100.0 / todays_checks)
+                                WHERE monitor_id = ?`,
+                                [responseTime, errorMessage, monitorId]
+                            );
+                            
+                            // 2. Create an incident record
+                            await this.db.execute(
+                                `INSERT INTO monitor_incidents 
+                                 (monitor_id, started_at, ended_at, error_message, duration_seconds)
+                                 VALUES (?, ?, NOW(), ?, ?)`,
+                                [monitorId, potentialOutage[0].started_at, errorMessage, potentialOutage[0].duration_seconds]
+                            );
+                            
+                            logger.info(`Monitor ${monitorId} (${monitor.name}) recovered after significant outage of ${potentialOutage[0].duration_seconds} seconds`, {
+                                monitorId,
+                                name: monitor.name
+                            });
+                            
+                            // 3. Send recovery webhook
+                            if (monitor.webhook_url) {
+                                await this.sendWebhook(monitor, status, responseTime, null);
+                            }
+                        } else {
+                            // This was a brief outage, just restore status without changing status_since
+                            await this.db.execute(
+                                `UPDATE monitor_status SET
+                                    current_status = 1,
+                                    last_check_time = NOW(),
+                                    last_response_time = ?,
+                                    last_error_message = ?,
+                                    todays_checks = todays_checks + 1,
+                                    todays_successful_checks = todays_successful_checks + 1,
+                                    daily_uptime_percentage = (todays_successful_checks * 100.0 / todays_checks)
+                                WHERE monitor_id = ?`,
+                                [responseTime, errorMessage, monitorId]
+                            );
+                            
+                            logger.info(`Monitor ${monitorId} (${monitor.name}) recovered after brief outage - no incident recorded`, {
+                                monitorId,
+                                name: monitor.name
+                            });
+                        }
+                        
+                        // Clean up the potential outage entry
+                        await this.db.execute(
+                            `DELETE FROM monitor_potential_outages WHERE monitor_id = ?`,
+                            [monitorId]
+                        );
+                    }
+                }
+                
+                // Check if we need to create a significant outage incident while still DOWN
+                if (status === false) {
+                    // Check if we've been down long enough
+                    const [potentialOutage] = await this.db.execute(
+                        `SELECT started_at, TIMESTAMPDIFF(SECOND, started_at, NOW()) as duration_seconds
+                         FROM monitor_potential_outages
+                         WHERE monitor_id = ?`,
+                        [monitorId]
+                    );
+                    
+                    if (potentialOutage.length > 0) {
+                        const duration = potentialOutage[0].duration_seconds;
+                        
+                        // If we just crossed the 2-minute threshold
+                        if (duration >= 120 && duration < 120 + (monitor.interval_seconds || 60)) {
+                            // It's been 2+ minutes, officially mark as a significant outage
+                            
+                            // 1. Update status_since to the outage start time
+                            await this.db.execute(
+                                `UPDATE monitor_status SET
+                                    status_since = ?
+                                WHERE monitor_id = ?`,
+                                [potentialOutage[0].started_at, monitorId]
+                            );
+                            
+                            // 2. Create an open incident
+                            await this.db.execute(
+                                `INSERT INTO monitor_incidents (monitor_id, started_at, error_message)
+                                 VALUES (?, ?, ?)`,
+                                [monitorId, potentialOutage[0].started_at, errorMessage]
+                            );
+                            
+                            logger.error(`Monitor ${monitorId} (${monitor.name}) has been DOWN for 2+ minutes - significant outage confirmed`, {
+                                monitorId,
+                                name: monitor.name,
+                                duration: duration
+                            });
+                            
+                            // 3. Send outage webhook
+                            if (monitor.webhook_url) {
+                                await this.sendWebhook(monitor, status, responseTime, errorMessage);
+                            }
+                        }
+                    }
+                }
+                
+                await this.db.commit();
+                
+            } catch (error) {
+                await this.db.rollback();
+                throw error;
+            }
         } catch (error) {
             logger.error(`Error logging result for monitor ${monitorId}:`, error);
-            monitorError(monitorId, error);
         }
     }
 

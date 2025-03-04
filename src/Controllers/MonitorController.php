@@ -15,46 +15,18 @@ class MonitorController extends BaseController {
     public function index() {
         $userId = $this->auth->getCurrentUser()['id'];
         
-        // Debug: Log the raw status logs for the first few monitors
-        $debugSql = "SELECT m.id, m.name, ml.checked_at, ml.status, ml.error_message 
-                    FROM monitors m 
-                    JOIN monitor_logs ml ON m.id = ml.monitor_id
-                    WHERE m.user_id = ?
-                    ORDER BY m.id, ml.checked_at DESC
-                    LIMIT 20";
-        $debugLogs = $this->db->query($debugSql, [$userId])->fetchAll();
-        
-        // Add debug logging
-        $logger = \Core\Logger::getInstance();
-        $logger->info('Recent monitor logs: ' . json_encode($debugLogs));
-        
-        // Use this more reliable query to get the latest status
+        // Much simpler query now
         $sql = "SELECT m.*,
-                    latest_logs.status as current_status,
-                    latest_logs.response_time as last_response_time,
-                    latest_logs.checked_at as last_checked,
-                    latest_logs.error_message as latest_error
-                FROM monitors m 
-                LEFT JOIN (
-                    SELECT ml.*
-                    FROM monitor_logs ml
-                    INNER JOIN (
-                        SELECT monitor_id, MAX(checked_at) as max_checked_at
-                        FROM monitor_logs
-                        GROUP BY monitor_id
-                    ) as latest ON ml.monitor_id = latest.monitor_id AND ml.checked_at = latest.max_checked_at
-                ) as latest_logs ON m.id = latest_logs.monitor_id
-                WHERE m.user_id = ?
-                ORDER BY m.name ASC";
+                ms.current_status,
+                ms.last_response_time,
+                ms.last_check_time as last_checked,
+                ms.last_error_message as latest_error
+            FROM monitors m 
+            LEFT JOIN monitor_status ms ON m.id = ms.monitor_id
+            WHERE m.user_id = ?
+            ORDER BY m.name ASC";
         
         $monitors = $this->db->query($sql, [$userId])->fetchAll();
-        
-        // Debug: Log the status of monitors
-        foreach ($monitors as $monitor) {
-            $logger->info("Monitor {$monitor['id']} ({$monitor['name']}) status: " . 
-                ($monitor['current_status'] ? 'UP' : 'DOWN') . 
-                ", Last checked: {$monitor['last_checked']}, Error: {$monitor['latest_error']}");
-        }
         
         $this->view('monitors/list', ['monitors' => $monitors]);
     }

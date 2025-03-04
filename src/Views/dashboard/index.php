@@ -51,7 +51,6 @@
                     <thead>
                             <tr>
                                 <th>Monitor</th>
-                                <th>Error</th>
                                 <th>Started At</th>
                                 <th>Duration</th>
                             </tr>
@@ -60,11 +59,10 @@
                             <?php foreach ($recentIncidents as $incident): ?>
                             <tr>
                                 <td><?= html_entity_decode(htmlspecialchars($incident['name'])) ?></td>
-                                <td><?= htmlspecialchars($incident['error_message'] ?? 'No error message found') ?></td>
                                 <td><?= (new DateTime($incident['started_at']))->format('n/j/Y g:ia') ?></td>
                                 <td>
                                     <?php if ($incident['ended_at']): ?>
-                                        <?= $this->formatUptime($incident['duration_seconds']) ?>
+                                        <?= $this->formatUptime($incident['duration_seconds'], false) ?>
                                     <?php else: ?>
                                         <span class="has-text-danger">Ongoing</span>
                                     <?php endif; ?>
