@@ -59,7 +59,7 @@
                         <tbody>
                             <?php foreach ($recentIncidents as $incident): ?>
                             <tr>
-                                <td><?= htmlspecialchars($incident['name']) ?></td>
+                                <td><?= html_entity_decode(htmlspecialchars($incident['name'])) ?></td>
                                 <td><?= htmlspecialchars($incident['error_message'] ?? 'No error message found') ?></td>
                                 <td><?= (new DateTime($incident['started_at']))->format('n/j/Y g:ia') ?></td>
                                 <td>
