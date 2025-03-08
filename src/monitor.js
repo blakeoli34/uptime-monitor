@@ -244,6 +244,13 @@ class UptimeMonitor {
             await this.db.beginTransaction();
             
             try {
+                // Check for existing open incidents to prevent duplicates
+                const [existingIncidents] = await this.db.execute(
+                    'SELECT id FROM monitor_incidents WHERE monitor_id = ? AND ended_at IS NULL',
+                    [monitorId]
+                );
+                const hasOpenIncident = existingIncidents.length > 0;
+                
                 // Update monitor counters and last_check_time in all cases
                 if (statusRows.length === 0) {
                     // First check for this monitor - insert with current status
@@ -331,13 +338,25 @@ class UptimeMonitor {
                                 [responseTime, errorMessage, monitorId]
                             );
                             
-                            // 2. Create an incident record
-                            await this.db.execute(
-                                `INSERT INTO monitor_incidents 
-                                 (monitor_id, started_at, ended_at, error_message, duration_seconds)
-                                 VALUES (?, ?, NOW(), ?, ?)`,
-                                [monitorId, potentialOutage[0].started_at, errorMessage, potentialOutage[0].duration_seconds]
-                            );
+                            // Close any existing open incidents to prevent duplicates
+                            if (hasOpenIncident) {
+                                await this.db.execute(
+                                    `UPDATE monitor_incidents 
+                                     SET ended_at = NOW(), 
+                                         duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
+                                     WHERE monitor_id = ? AND ended_at IS NULL`,
+                                    [monitorId]
+                                );
+                                logger.info(`Closed existing open incident for monitor ${monitorId} (${monitor.name})`);
+                            } else {
+                                // 2. Create a new closed incident record if none exists
+                                await this.db.execute(
+                                    `INSERT INTO monitor_incidents 
+                                     (monitor_id, started_at, ended_at, error_message, duration_seconds)
+                                     VALUES (?, ?, NOW(), ?, ?)`,
+                                    [monitorId, potentialOutage[0].started_at, errorMessage, potentialOutage[0].duration_seconds]
+                                );
+                            }
                             
                             logger.info(`Monitor ${monitorId} (${monitor.name}) recovered after significant outage of ${potentialOutage[0].duration_seconds} seconds`, {
                                 monitorId,
@@ -362,6 +381,18 @@ class UptimeMonitor {
                                 WHERE monitor_id = ?`,
                                 [responseTime, errorMessage, monitorId]
                             );
+                            
+                            // Close any existing open incidents (shouldn't happen, but as a safeguard)
+                            if (hasOpenIncident) {
+                                await this.db.execute(
+                                    `UPDATE monitor_incidents 
+                                     SET ended_at = NOW(), 
+                                         duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
+                                     WHERE monitor_id = ? AND ended_at IS NULL`,
+                                    [monitorId]
+                                );
+                                logger.info(`Closed existing brief incident for monitor ${monitorId} (${monitor.name})`);
+                            }
                             
                             logger.info(`Monitor ${monitorId} (${monitor.name}) recovered after brief outage - no incident recorded`, {
                                 monitorId,
@@ -402,22 +433,31 @@ class UptimeMonitor {
                                 [potentialOutage[0].started_at, monitorId]
                             );
                             
-                            // 2. Create an open incident
-                            await this.db.execute(
-                                `INSERT INTO monitor_incidents (monitor_id, started_at, error_message)
-                                 VALUES (?, ?, ?)`,
-                                [monitorId, potentialOutage[0].started_at, errorMessage]
-                            );
-                            
-                            logger.error(`Monitor ${monitorId} (${monitor.name}) has been DOWN for 2+ minutes - significant outage confirmed`, {
-                                monitorId,
-                                name: monitor.name,
-                                duration: duration
-                            });
-                            
-                            // 3. Send outage webhook
-                            if (monitor.webhook_url) {
-                                await this.sendWebhook(monitor, status, responseTime, errorMessage);
+                            // Only create an incident if there isn't already an open one
+                            if (!hasOpenIncident) {
+                                // 2. Create an open incident
+                                await this.db.execute(
+                                    `INSERT INTO monitor_incidents (monitor_id, started_at, error_message)
+                                     VALUES (?, ?, ?)`,
+                                    [monitorId, potentialOutage[0].started_at, errorMessage]
+                                );
+                                
+                                logger.error(`Monitor ${monitorId} (${monitor.name}) has been DOWN for 2+ minutes - significant outage confirmed`, {
+                                    monitorId,
+                                    name: monitor.name,
+                                    duration: duration
+                                });
+                                
+                                // 3. Send outage webhook
+                                if (monitor.webhook_url) {
+                                    await this.sendWebhook(monitor, status, responseTime, errorMessage);
+                                }
+                            } else {
+                                logger.info(`Monitor ${monitorId} (${monitor.name}) has been DOWN for 2+ minutes but incident already exists`, {
+                                    monitorId,
+                                    name: monitor.name,
+                                    duration: duration
+                                });
                             }
                         }
                     }

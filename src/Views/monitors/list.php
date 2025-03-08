@@ -76,7 +76,7 @@
                                 <span class="icon">
                                     <i class="fas <?= $monitor['type'] === 'http' ? 'fa-globe' : 'fa-network-wired' ?>"></i>
                                 </span>
-                                <span><?= htmlspecialchars($monitor['url']) ?></span>
+                                <a href="<?= $monitor['type'] === 'http' ? htmlspecialchars($monitor['url']) : '' ?>" target="_blank"><span><?= htmlspecialchars($monitor['url']) ?></span></a>
                             </span>
                         </p>
 
